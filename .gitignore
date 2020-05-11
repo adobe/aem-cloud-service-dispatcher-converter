@@ -1,0 +1,7 @@
+.idea
+target
+/result.log
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
