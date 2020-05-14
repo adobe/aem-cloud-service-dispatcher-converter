@@ -24,6 +24,8 @@ SUMMARY_REPORT_FILE = join(TARGET_FOLDER, "conversion-report.md")
 
 SUMMARY_REPORT_LINE_SEPARATOR = "\n"
 
+WARNING = "WARNING"
+
 ACTION_ADDED = "Added"
 
 ACTION_DELETED = "Deleted"
@@ -68,6 +70,8 @@ INCLUDE_SYNTAX_IN_VHOST = "Include"
 
 INCLUDE_SYNTAX_IN_FARM = "$include"
 
+REWRITES_MODULE = "<IfModule mod_rewrite.c>"
+
 RENDERS_SECTION = "/renders"
 
 VIRTUALHOSTS_SECTION_IN_FARM = "/virtualhosts"
@@ -83,6 +87,8 @@ FILTERS_SECTION = "/filter"
 IF_BLOCK_START = "<If"
 
 IF_BLOCK_END = "</If>"
+
+IFMODULE_END = "</IfModule>"
 
 BLOCK_START = "block_start"
 

@@ -103,13 +103,20 @@ class AEMDispatcherConverter:
     # 2. Get rid of all non-publish virtual hosts
     def __remove_non_publish_vhost_files(self):
         conversion_step = self.__remove_non_publish_vhost_files_summary_generator()
-        # Remove any vhost file in conf.d/enabled_vhosts that has author, unhealthy, health, lc or flush in its name.
         enabled_vhosts_dir_path = join(self.__dispatcher_config_directory, constants.CONF_D,
                                        constants.ENABLED_VHOSTS)
+        # Remove any vhost file in conf.d/enabled_vhosts that has author, unhealthy, health, lc or flush in its name.
         non_publish_keyword_list = ["author", "unhealthy", "health", "lc", "flush"]
         for keyword in non_publish_keyword_list:
             FileOperationsUtility.__delete_all_files_containing_substring__(enabled_vhosts_dir_path, keyword,
                                                                             conversion_step)
+        # check for non-symlink enabled_vhost files
+        enabled_vhost_files = [f for f in glob(join(enabled_vhosts_dir_path, "**", "*." + constants.VHOST), recursive=True)]
+        for file in enabled_vhost_files:
+            if not self.__is_symlink_file(file):
+                conversion_operation = ConversionOperation(constants.WARNING, file, "Found non-symlink enabled_vhost file.")
+                conversion_step.__add_operation__(conversion_operation)
+                logger.info("AEMDispatcherConverter: Found non-symlink enabled_vhost file %s", file)
         # All farm files in conf.d/available_vhosts that are not linked to can be removed as well.
         # TODO : This is a hack, instead find symlinks in enabled_vhosts and their targets in available_vhosts
         available_vhosts_dir_path = join(self.__dispatcher_config_directory, constants.CONF_D,
@@ -196,19 +203,45 @@ class AEMDispatcherConverter:
                                                                              constants.INCLUDE_SYNTAX_IN_VHOST,
                                                                              old_file_name, new_file_name,
                                                                              conversion_step)
-        # If the folder however contains multiple virtual host specific files
         elif file_count > 1:
-            for file in files:
-                old_file_name = basename(file)
-                # their contents should be copied to the Include statement referring to them in the virtual host files.
-                rules_extracted_from_file = FileOperationsUtility.__get_content_from_file__(file)
-                FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(conf_d_dir_path,
-                                                                                              constants.VHOST,
-                                                                                              old_file_name,
-                                                                                              rules_extracted_from_file,
-                                                                                              constants.INCLUDE_SYNTAX_IN_VHOST,
-                                                                                              conversion_step)
-                FileOperationsUtility.__delete_file__(file, conversion_step)
+            # If the folder however contains multiple virtual host specific files
+            available_vhost_files = self.__get_all_available_vhost_files()
+            if len(available_vhost_files) > 1:
+                for file in files:
+                    old_file_name = basename(file)
+                    # their contents should be copied to the Include statement referring to them in the virtual host files.
+                    rules_extracted_from_file = FileOperationsUtility.__get_content_from_file__(file, True)
+                    FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(conf_d_dir_path,
+                                                                                                  constants.VHOST,
+                                                                                                  old_file_name,
+                                                                                                  rules_extracted_from_file,
+                                                                                                  constants.INCLUDE_SYNTAX_IN_VHOST,
+                                                                                                  conversion_step)
+                    FileOperationsUtility.__delete_file__(file, conversion_step)
+            elif len(available_vhost_files) == 1:
+                # If the folder however contains multiple rule files specific to a single vhost file, we should
+                # consolidate all the included rule file into a single rule file and include it.
+                # get the all the rewrite rule files names
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # find all the rule files names that are actually included in single the vhost file
+                rule_files_included = FileOperationsUtility.__get_names_of_rule_files_included__(available_vhost_files[0],
+                                                                                        rule_files,
+                                                                                        constants.INCLUDE_SYNTAX_IN_VHOST)
+                # delete the rule files not included in the single available vhost file, and get the files actually used
+                files = self.__filter_and_remove_unused_files(files, rule_files_included, conversion_step)
+                # consolidate all rule files into a single rewrite.rules file
+                FileOperationsUtility.__consolidate_all_rule_files_into_single_rule_file__(files,
+                                                                                           join(rewrites_dir_path,
+                                                                                                "rewrite.rules"),
+                                                                                           conversion_step)
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # replace all statements including the files in a IfModule with a single include statement
+                FileOperationsUtility.__replace_file_includes_in_section_or_ifmodule__(conf_d_dir_path, constants.VHOST,
+                                                                                       constants.REWRITES_MODULE,
+                                                                                       rule_files, "rewrite.rules",
+                                                                                       conversion_step)
+
+
         self.__conversion_steps.append(conversion_step)
 
     def __check_rewrites_summary_generator(self):
@@ -384,7 +417,13 @@ class AEMDispatcherConverter:
         for file in files:
             new_file_name = basename(file).replace("_farm", "").replace(".any", ".farm")
             FileOperationsUtility.__rename_file__(file, join(dirname(file), new_file_name), conversion_step)
-        files = [f for f in glob(join(enabled_farms_dir_path, "**", "*.farm"), recursive=True)]
+        # check for non-symlink enabled_farm files
+        enabled_farm_files = [f for f in glob(join(enabled_farms_dir_path, "**", "*." + constants.FARM), recursive=True)]
+        for file in enabled_farm_files:
+            if not self.__is_symlink_file(file):
+                conversion_operation = ConversionOperation(constants.WARNING, file, "Found non-symlink enabled_farm file.")
+                conversion_step.__add_operation__(conversion_operation)
+                logger.info("AEMDispatcherConverter: Found non-symlink enabled_farm file %s", file)
         self.__rename_symlink_target_links(conversion_step)
         self.__conversion_steps.append(conversion_step)
 
@@ -395,15 +434,19 @@ class AEMDispatcherConverter:
         # in all enabled_farm files
         for file in files:
             # change the target links to point to the renamed files in available_farms
-            old_target = FileOperationsUtility.__get_content_from_file__(file)[1]  # first line will be a comment
-            old_target_file_name = basename(old_target)
-            new_target_file_name = old_target_file_name.replace("_farm", "").replace(".any", ".farm")
-            new_target = old_target.replace(old_target_file_name, new_target_file_name)
-            with open(file, "w") as f:
-                f.write(new_target)
-                conversion_operation = ConversionOperation(constants.ACTION_RENAMED, file, "Renamed symlink target "
-                                                           + old_target + " to " + new_target)
-                conversion_step.__add_operation__(conversion_operation)
+            content_of_file = FileOperationsUtility.__get_content_from_file__(file, False)
+            # if it is s symlink file its length of content will be 2 (1. comment mentioning the source, 2. target link)
+            if len(content_of_file) == 2:
+                old_target = content_of_file[1]  # target link will be the 2nd item
+                old_target_file_name = basename(old_target)
+                new_target_file_name = old_target_file_name.replace("_farm", "").replace(".any", ".farm")
+                new_target = old_target.replace(old_target_file_name, new_target_file_name)
+                with open(file, "w") as f:
+                    f.write(new_target)
+                    conversion_operation = ConversionOperation(constants.ACTION_RENAMED, file, "Renamed symlink target "
+                                                               + old_target + " to " + new_target)
+                    conversion_step.__add_operation__(conversion_operation)
+                    logger.info("Renamed symlink target in file %s , from '%s' to '%s'", file, old_target, new_target)
 
     def __rename_farm_files_summary_generator(self):
         logger.info(
@@ -478,20 +521,46 @@ class AEMDispatcherConverter:
                                                                         constants.INCLUDE_SYNTAX_IN_FARM,
                                                                         old_file_name, '"../cache/rules.any"',
                                                                         conversion_step)
-        # If the folder however contains multiple, farm specific files with that pattern,
-        # their contents should be copied to the $include statement referring to them in the farm files.
         elif file_count > 1:
-            for file in files:
-                if file.endswith("_cache.any"):
-                    content_from_cache_file = FileOperationsUtility.__get_content_from_file__(file)
-                    FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
-                        conf_dispatcher_d_dir_path,
-                        constants.FARM, basename(file),
-                        content_from_cache_file,
-                        constants.INCLUDE_SYNTAX_IN_FARM,
-                        conversion_step)
-                    FileOperationsUtility.__delete_file__(file, conversion_step)
-
+            # If the folder however contains multiple, farm specific files with that pattern,
+            # their contents should be copied to the $include statement referring to them in the farm files.
+            available_farm_files = self.__get_all_available_farm_files()
+            if len(available_farm_files) > 1:
+                for file in files:
+                    if file.endswith("_cache.any"):
+                        content_from_cache_file = FileOperationsUtility.__get_content_from_file__(file, True)
+                        FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
+                            conf_dispatcher_d_dir_path,
+                            constants.FARM, basename(file),
+                            content_from_cache_file,
+                            constants.INCLUDE_SYNTAX_IN_FARM,
+                            conversion_step)
+                        FileOperationsUtility.__delete_file__(file, conversion_step)
+            elif len(available_farm_files) == 1:
+                # If the folder however contains multiple rule files specific to a single farm file,, we should
+                # consolidate all the included rule file into a single rule file and include it.
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # find all the rule files that are actually included in single the farm file
+                rule_files_included = FileOperationsUtility.__get_names_of_rule_files_included__(available_farm_files[0],
+                                                                                        rule_files,
+                                                                                        constants.INCLUDE_SYNTAX_IN_FARM)
+                # delete the rule files not included in the single available farm file, and get the files actually used
+                files = self.__filter_and_remove_unused_files(files, rule_files_included, conversion_step)
+                # consolidate all rule files into a single rules.any file
+                FileOperationsUtility.__consolidate_all_rule_files_into_single_rule_file__(files,
+                                                                                           join(
+                                                                                               cache_dir_path,
+                                                                                               "rules.any"),
+                                                                                           conversion_step)
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # replace all statements including the files in a cache-rules section with a single include statement
+                include_statement_to_replace_with = '$include "../cache/rules.any"'
+                FileOperationsUtility.__replace_file_includes_in_section_or_ifmodule__(conf_dispatcher_d_dir_path,
+                                                                                       constants.FARM,
+                                                                                       constants.RULES_SECTION,
+                                                                                       rule_files,
+                                                                                       include_statement_to_replace_with,
+                                                                                       conversion_step)
         # Remove any file that has the suffix _invalidate_allowed.any
         for file in files:
             if file.endswith("_invalidate_allowed.any"):
@@ -569,19 +638,46 @@ class AEMDispatcherConverter:
                                                                         constants.INCLUDE_SYNTAX_IN_FARM,
                                                                         old_file_name, '"../clientheaders/clientheaders.any"',
                                                                         conversion_step)
-        # If the folder however contains multiple, farm specific files with that pattern,
         elif file_count > 1:
-            for file in files:
-                if file.endswith("_clientheaders.any"):
-                    content_from_client_header_file = FileOperationsUtility.__get_content_from_file__(file)
-                    # their contents should be copied to the $include statement referring to them in the farm files.
-                    FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
-                        conf_dispatcher_d_dir_path,
-                        constants.FARM, basename(file),
-                        content_from_client_header_file,
-                        constants.INCLUDE_SYNTAX_IN_FARM,
-                        conversion_step)
-                    FileOperationsUtility.__delete_file__(file, conversion_step)
+            # If the folder however contains multiple, farm specific files with that pattern,
+            available_farm_files = self.__get_all_available_farm_files()
+            if len(available_farm_files) > 1:
+                for file in files:
+                    if file.endswith("_clientheaders.any"):
+                        content_from_client_header_file = FileOperationsUtility.__get_content_from_file__(file, True)
+                        # their contents should be copied to the $include statement referring to them in the farm files.
+                        FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
+                            conf_dispatcher_d_dir_path,
+                            constants.FARM, basename(file),
+                            content_from_client_header_file,
+                            constants.INCLUDE_SYNTAX_IN_FARM,
+                            conversion_step)
+                        FileOperationsUtility.__delete_file__(file, conversion_step)
+            elif len(available_farm_files) == 1:
+                # If the folder however contains multiple rule files specific to a single farm file, we should
+                # consolidate all the included rule file into a single rule file and include it.
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # find all the rule files that are actually included in single the farm file
+                rule_files_included = FileOperationsUtility.__get_names_of_rule_files_included__(available_farm_files[0],
+                                                                                        rule_files,
+                                                                                        constants.INCLUDE_SYNTAX_IN_FARM)
+                # delete the rule files not included in the single available farm file, and get the files actually used
+                files = self.__filter_and_remove_unused_files(files, rule_files_included, conversion_step)
+                # consolidate all rule files into a single clientheaders.any file
+                FileOperationsUtility.__consolidate_all_rule_files_into_single_rule_file__(files,
+                                                                                           join(
+                                                                                               client_headers_dir_path,
+                                                                                               "clientheaders.any"),
+                                                                                           conversion_step)
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # replace all statements including the files in the clientheaders section with a single include statement
+                include_statement_to_replace_with = '$include "../clientheaders/clientheaders.any"'
+                FileOperationsUtility.__replace_file_includes_in_section_or_ifmodule__(conf_dispatcher_d_dir_path,
+                                                                                       constants.FARM,
+                                                                                       constants.CLIENT_HEADER_SECTION,
+                                                                                       rule_files,
+                                                                                       include_statement_to_replace_with,
+                                                                                       conversion_step)
         self.__copy_default_clientheader_files_from_sdk(conf_dispatcher_d_dir_path,
                                                         client_headers_dir_path, conversion_step)
         self.__conversion_steps.append(conversion_step)
@@ -690,17 +786,45 @@ class AEMDispatcherConverter:
                                                                         conversion_step)
         # If the folder however contains multiple, farm specific files with that pattern,
         elif file_count > 1:
-            for file in files:
-                if file.endswith("_filters.any"):
-                    content_from_client_header_file = FileOperationsUtility.__get_content_from_file__(file)
-                    # their contents should be copied to the $include statement referring to them in the farm files.
-                    FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
-                        conf_dispatcher_d_dir_path,
-                        constants.FARM, basename(file),
-                        content_from_client_header_file,
-                        constants.INCLUDE_SYNTAX_IN_FARM,
-                        conversion_step)
-                    FileOperationsUtility.__delete_file__(file, conversion_step)
+            available_farm_files = self.__get_all_available_farm_files()
+            if len(available_farm_files) > 1:
+                for file in files:
+                    if file.endswith("_filters.any"):
+                        content_from_client_header_file = FileOperationsUtility.__get_content_from_file__(file, True)
+                        # their contents should be copied to the $include statement referring to them in the farm files.
+                        FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
+                            conf_dispatcher_d_dir_path,
+                            constants.FARM, basename(file),
+                            content_from_client_header_file,
+                            constants.INCLUDE_SYNTAX_IN_FARM,
+                            conversion_step)
+                        FileOperationsUtility.__delete_file__(file, conversion_step)
+            elif len(available_farm_files) == 1:
+                # If the folder however contains multiple rule files specific to a single farm file, we should
+                # consolidate all the included rule file into a single rule file and include it.
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # find all the rule files that are actually included in single the farm file
+                rule_files_included = FileOperationsUtility.__get_names_of_rule_files_included__(available_farm_files[0],
+                                                                                        rule_files,
+                                                                                        constants.INCLUDE_SYNTAX_IN_FARM)
+                # delete the rule files not included in the single available farm file, and get the files actually used
+                files = self.__filter_and_remove_unused_files(files, rule_files_included, conversion_step)
+                # consolidate all rule files into a single filters.any file
+                FileOperationsUtility.__consolidate_all_rule_files_into_single_rule_file__(files,
+                                                                                           join(
+                                                                                               filters_dir_path,
+                                                                                               "filters.any"),
+                                                                                           conversion_step)
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # replace all statements including the files in the filters section with a single include statement
+                include_statement_to_replace_with = '$include "../filters/filters.any"'
+                FileOperationsUtility.__replace_file_includes_in_section_or_ifmodule__(conf_dispatcher_d_dir_path,
+                                                                                       constants.FARM,
+                                                                                       constants.FILTERS_SECTION,
+                                                                                       rule_files,
+                                                                                       include_statement_to_replace_with,
+                                                                                       conversion_step)
+
         self.__copy_default_filter_files_from_sdk(conf_dispatcher_d_dir_path, filters_dir_path, conversion_step)
         self.__conversion_steps.append(conversion_step)
 
@@ -847,19 +971,45 @@ class AEMDispatcherConverter:
                                                                         constants.INCLUDE_SYNTAX_IN_FARM,
                                                                         old_file_name, '"../virtualhosts/virtualhosts.any"',
                                                                         conversion_step)
-        # If the folder however contains multiple, farm specific files with that pattern,
         elif file_count > 1:
-            for file in files:
-                if file.endswith("_vhosts.any"):
-                    content_from_vhost_file = FileOperationsUtility.__get_content_from_file__(file)
-                    # their contents should be copied to the $include statement referring to them in the farm files.
-                    FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
-                        conf_dispatcher_d_dir_path,
-                        constants.FARM, basename(file),
-                        content_from_vhost_file,
-                        constants.INCLUDE_SYNTAX_IN_FARM,
-                        conversion_step)
-                    FileOperationsUtility.__delete_file__(file, conversion_step)
+            # If the folder however contains multiple, farm specific files with that pattern,
+            available_farm_files = self.__get_all_available_farm_files()
+            if len(available_farm_files) > 1:
+                for file in files:
+                    if file.endswith("_vhosts.any"):
+                        content_from_vhost_file = FileOperationsUtility.__get_content_from_file__(file, True)
+                        # their contents should be copied to the $include statement referring to them in the farm files.
+                        FileOperationsUtility.__replace_include_statement_with_content_of_rule_file__(
+                            conf_dispatcher_d_dir_path,
+                            constants.FARM, basename(file),
+                            content_from_vhost_file,
+                            constants.INCLUDE_SYNTAX_IN_FARM,
+                            conversion_step)
+                        FileOperationsUtility.__delete_file__(file, conversion_step)
+            elif len(available_farm_files) == 1:
+                # If the folder however contains multiple rule files specific to a single farm file, we should
+                # consolidate all the included rule file into a single rule file and include it.
+                rule_files = FileOperationsUtility.__get_all_file_names__(files)
+                # find all the rule files that are actually included in single the farm file
+                rule_files_included = FileOperationsUtility.__get_names_of_rule_files_included__(available_farm_files[0],
+                                                                                        rule_files,
+                                                                                        constants.INCLUDE_SYNTAX_IN_FARM)
+                # delete the rule files not included in the single available farm file, and get the files actually used
+                files = self.__filter_and_remove_unused_files(files, rule_files_included, conversion_step)
+                # consolidate all remaining rule files into a single virtualhosts.any file
+                FileOperationsUtility.__consolidate_all_rule_files_into_single_rule_file__(files,
+                                                                                           join(
+                                                                                               renamed_virtualhosts_dir_path,
+                                                                                               "virtualhosts.any"),
+                                                                                           conversion_step)
+                # replace all statements including the files in the virtualhosts section with a single include statement
+                include_statement_to_replace_with = '$include "../virtualhosts/virtualhosts.any"'
+                FileOperationsUtility.__replace_file_includes_in_section_or_ifmodule__(conf_dispatcher_d_dir_path,
+                                                                                       constants.FARM,
+                                                                                       constants.VIRTUALHOSTS_SECTION_IN_FARM,
+                                                                                       rule_files,
+                                                                                       include_statement_to_replace_with,
+                                                                                       conversion_step)
         self.__copy_default_virtualhost_files_from_sdk(conf_dispatcher_d_dir_path,
                                                        renamed_virtualhosts_dir_path,
                                                        conversion_step)
@@ -974,3 +1124,30 @@ class AEMDispatcherConverter:
         logger.debug("AEMDispatcherConverter: Renaming PUBLISH_DOCROOT to DOCROOT in all farm files.")
         return ConversionStep("Replace variables in farm files",
                               "Rename PUBLISH_DOCROOT to DOCROOT in all farm files.")
+
+    def __get_all_available_vhost_files(self):
+        available_vhosts_dir_path = join(self.__dispatcher_config_directory, constants.CONF_D,
+                                        constants.AVAILABLE_VHOSTS)
+        files = [f for f in glob(join(available_vhosts_dir_path, "**", "*." + constants.VHOST), recursive=True)]
+        return files
+
+    def __get_all_available_farm_files(self):
+        available_farms_dir_path = join(self.__dispatcher_config_directory, constants.CONF_DISPATCHER_D,
+                                        constants.AVAILABLE_FARMS)
+        files = [f for f in glob(join(available_farms_dir_path, "**", "*." + constants.FARM), recursive=True)]
+        return files
+
+    # delete all the non-included rule files, and return the files (file paths) that are actually included
+    def __filter_and_remove_unused_files(self, all_files, used_file_names, conversion_step):
+        used_files = set()
+        for file in all_files:
+            if basename(file) in used_file_names:
+                used_files.add(file)
+            else:
+                FileOperationsUtility.__delete_file__(file, conversion_step)
+        return used_files
+
+    # this is a hack to check if files are symlinks
+    def __is_symlink_file(self, file):
+        file_content = FileOperationsUtility.__get_content_from_file__(file, False)
+        return len(file_content) == 2 and file_content[1].startswith("../")

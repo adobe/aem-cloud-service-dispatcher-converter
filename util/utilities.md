@@ -8,8 +8,16 @@ This section lists generic file and folder manipulation utility methods exposed 
    Checks vhost files for usage of undefined variables. If found, print warning in terminal and log error.
 
    **Parameters**
-   1. *dir_path (str*): The directory to be searched under.
+   1. *dir_path (str)*: The directory to be searched under.
    1. *defined_variables_list (List[str])*: The list of variables that are defined.
+
+* ***`__consolidate_all_rule_files_into_single_rule_file__`***
+   Consolidate content of all rule files into a single rule file, and delete the given rule files.
+
+   **Parameters**
+   1. *rule_files ((List[IO[AnyStr]]))*: The rule files whose content needs to be consolidated into a single rule file.
+   1. *consolidated_rule_file_path (str)*: The new rule file path (along with the new rule file name).
+   1. *conversion_step (ConversionStep)*: The conversion step to which the performed actions are to be added.
 
 * ***`__delete_file__`***
 
@@ -68,15 +76,41 @@ This section lists generic file and folder manipulation utility methods exposed 
     a list containing the names of the files in the directory.
 
 
+* ***`__get_all_file_names__`***
+
+    Get all the file names from the provided list of files.
+
+   **Parameters**
+   1. *files (List[IO[AnyStr]])*: The list of files whose names we want to retrieve .
+
+   **Returns**
+    List[str]: A list of file names.
+
+
 * ***`__get_content_from_file__`***
 
     Returns the content of a given file.
+    Also provides the functionality to recursively fetch the content of a symlink files target.
 
    **Parameters**
-   1. *file_path (str)*: The path to file whose content is to be retrieved
+   1. *file_path (str)*: The path to file whose content is to be retrieved.
+   1. *recursive (bool)*: If true and given file is a symlink file, then recursively fetch the content of the target link if true.
 
    **Returns**
     String: Content of the file
+
+
+* ***`__get_names_of_rule_files_included__`***
+
+    From the given list of rule files, get the file names which are actually included/used in the given file.
+
+   **Parameters**
+   1. *file_path (str)*: The file in which we need to check for the rule files' inclusion.
+   1. *rule_files_to_check (List[str])*: The list of rule files names, whose inclusion we need to check for.
+   1. *include_syntax (str)*: The include statement syntax (specific to vhost or farm files).
+
+   **Returns**
+    Set[str]: A set of file (from among the given rule files) which are actually included/used.
 
 
 * ***`__remove_all_usage_of_old_variable__`***
@@ -102,6 +136,20 @@ This section lists generic file and folder manipulation utility methods exposed 
    1. *conversion_step (ConversionStep)*: The conversion step to which the performed actions are to be added.
 
 
+* ***`__replace_file_includes_in_section_or_ifmodule__`***
+
+   In the specified section/module replace all statements including any file from the given list of rule files with new file include within specified section/module of all files (of given file extension) in specified directory and sub-directories.
+   Please provide only the replacement filename in case of replacement in vhost files, and complete replacement include statement in case of farm files.
+
+   **Parameters**
+   1. *dir_path (str)*: The path to directory whose files are to be processed.
+   1. *file_extension (str)*: The extension of the type that needs to be processed.
+   1. *section_header (str)*: The section header (within the file), whose content is to be processed.
+   1. *rule_files_to_replace (List[IO[AnyStr]])*: Tlist of rule files whose include statements are to be replaced.
+   1. *file_to_replace_with (str)*: Include statement or rule filename that is to be replaced with.
+   1. *conversion_step (ConversionStep)*: The conversion step to which the performed actions are to be added.
+
+
 * ***`__remove_non_matching_files_by_name__`***
 
    Remove the files in destination directory, not present in source directory (comparison by name).
@@ -118,7 +166,7 @@ This section lists generic file and folder manipulation utility methods exposed 
 
    **Parameters**
    1. *dir_path (str)*: The path to directory whose files are to be processed.
-   1. *whitelisted_directives_set (str)*: The set of whitelisted directives that are allowed (lowercase).
+   1. *whitelisted_directives_set (Set[str])*: The set of whitelisted directives that are allowed (lowercase).
    1. *conversion_step (ConversionStep)*: The conversion step to which the performed actions are to be added.
 
 

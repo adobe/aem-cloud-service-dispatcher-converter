@@ -161,12 +161,14 @@ class FileOperationsUtility:
                 logger.error("FileOperationsUtility: %s - %s.", e.filename, e.strerror)
 
     @staticmethod
-    def __get_content_from_file__(file_path):
+    def __get_content_from_file__(file_path, recursive):
         """
         Returns the content of a given file.
+        Also provides the functionality to recursively fetch the content of a symlink files target.
 
         Parameters:
             file_path (str): The path to file whose content is to be retrieved
+            recursive (bool): If true and given file is a symlink file, then recursively fetch the content of the target link
 
         Returns:
             str: Content of the file
@@ -187,6 +189,11 @@ class FileOperationsUtility:
                 logger.debug("FileOperationsUtility: Extracted content from file %s", file_path)
             except OSError as e:
                 logger.error("FileOperationsUtility: %s - %s.", e.filename, e.strerror)
+        # if file is actually a symlink file
+        # get the target link and extract the content from the target file if specified
+        if recursive and len(rules) == 2 and rules[1].startswith("../"):
+            target_file_path = join(dirname(file_path), rules[1])
+            rules = FileOperationsUtility.__get_content_from_file__(target_file_path, recursive)
         return rules
 
     @staticmethod
@@ -475,6 +482,195 @@ class FileOperationsUtility:
                                                                                      conversion_step)
 
     @staticmethod
+    def __replace_file_includes_in_section_of_farm_file(file_path, section_header, rule_files_to_replace,
+                                                        include_pattern_to_replace_with, conversion_step):
+        """
+        Replace include statements of specified rule files within specified sections in a farm file.
+        """
+
+        if exists(file_path) and isfile(file_path):
+            start_of_section = False
+            already_replaced = False
+            section_indentation = 0
+            try:
+                # open the file in read mode and read it
+                with open(file_path) as file:
+                    file_content = file.readlines()
+                file.close()
+                # open the file in write-mode and write to the file,
+                with open(file_path, "w") as file:
+                    for line in file_content:
+                        stripped_line = line.strip()
+                        # remove any contents in the given section
+                        # and replace with given include statements as applicable
+                        if stripped_line.startswith(section_header):
+                            section_indentation = len(line) - len(stripped_line)
+                            start_of_section = True
+                            file.write(line)
+                        # if section is found, replace the include statements within of the section
+                        elif start_of_section:
+                            if stripped_line.startswith(constants.INCLUDE_SYNTAX_IN_FARM):
+                                included_file_name = stripped_line.split()[1]
+                                # remove the quotes to get the actual included file path
+                                included_file_name = basename(included_file_name[:len(included_file_name)-1])
+                                if included_file_name in rule_files_to_replace:
+                                    # say we want to replace any clientheader include statements that looks as follows:
+                                    # $include "/etc/httpd/conf.dispatcher.d/clientheaders/xyz_publish_clientheaders.any"
+                                    # $include "/etc/httpd/conf.dispatcher.d/clientheaders/xyz_common_clientheaders.any"
+                                    # with the statement:
+                                    # $include "../clientheaders/clientheaders.any"
+                                    # we only need to replace the include statement once.
+                                    if already_replaced:
+                                        logger.info(
+                                            "FileOperationsUtility: Removed include statement '%s' in %s section of file "
+                                            "%s.", stripped_line, section_header, file_path)
+                                        conversion_operation = ConversionOperation(constants.ACTION_REMOVED, file_path,
+                                                                                   "Removed include statement '" + stripped_line
+                                                                                   + "' in section '" + section_header + "'")
+                                        conversion_step.__add_operation__(conversion_operation)
+                                        continue
+                                    else:
+                                        already_replaced = True
+                                        file.write(line[:len(line) - len(stripped_line) - 1] +
+                                                   include_pattern_to_replace_with + '\n')
+                                        logger.info(
+                                            "FileOperationsUtility: Replaced include statement '%s' of %s section with "
+                                            "include statement '%s' in file %s.",
+                                            stripped_line, section_header, include_pattern_to_replace_with, file_path)
+                                        conversion_operation = ConversionOperation(constants.ACTION_REPLACED, file_path,
+                                                                                   "Replaced include statement '" + stripped_line
+                                                                                   + "' in section '" + section_header
+                                                                                   + "' with '"
+                                                                                   + include_pattern_to_replace_with + "'")
+                                        conversion_step.__add_operation__(conversion_operation)
+                                else:
+                                    file.write(line)
+                            elif stripped_line == "}" and len(line) - len(stripped_line) == section_indentation:
+                                start_of_section = False
+                                file.write(line)
+                            else:
+                                file.write(line)
+                        # write out other lines as is
+                        else:
+                            file.write(line)
+            except OSError as e:
+                logger.error("FileOperationsUtility: %s - %s.", e.filename, e.strerror)
+
+    @staticmethod
+    def __replace_file_includes_in_ifmodule_of_vhost_file(file_path, module_header, rule_files_to_replace,
+                                            rule_file_to_replace_with, conversion_step):
+        """
+        Replace include statements of specified rule files within specified IfModule sections in a vhost file.
+        """
+
+        if exists(file_path) and isfile(file_path):
+            start_of_ifmodule = False
+            already_replaced = False
+            ifmodule_indentation = 0
+            try:
+                # open the file in read mode and read it
+                with open(file_path) as file:
+                    file_content = file.readlines()
+                file.close()
+                # open the file in write-mode and write to the file,
+                with open(file_path, "w") as file:
+                    for line in file_content:
+                        stripped_line = line.strip()
+                        # remove any contents in the given section
+                        # and replace with given include statements as applicable
+                        if stripped_line.startswith(module_header):
+                            ifmodule_indentation = len(line) - len(stripped_line)
+                            start_of_ifmodule = True
+                            file.write(line)
+                        # if section is found, replace the include statements within of the section
+                        elif start_of_ifmodule:
+                            if stripped_line.startswith(constants.INCLUDE_SYNTAX_IN_VHOST):
+                                included_file_name = basename(stripped_line.split(" ")[1])
+                                if included_file_name in rule_files_to_replace:
+                                    # say we want to replace any rewrite include statements that looks as follows:
+                                    # Include /etc/httpd/conf.d/rewrites/block_pages.rules
+                                    # Include /etc/httpd/conf.d/rewrites/sitemap_rewrite.rules
+                                    # Include /etc/httpd/conf.d/rewrites/allow_search_engines.rules
+                                    # with the statement:
+                                    # Include /etc/httpd/conf.d/rewrites/rewite.rules
+                                    # we only need to replace the include statement once.
+                                    if already_replaced:
+                                        logger.info(
+                                            "FileOperationsUtility: Removed included file '%s' in %s module of file "
+                                            "%s.", included_file_name, module_header, file_path)
+                                        conversion_operation = ConversionOperation(constants.ACTION_REMOVED, file_path,
+                                                                                   "Removed included file '" +
+                                                                                   included_file_name + "' in module '" +
+                                                                                   module_header + "'")
+                                        conversion_step.__add_operation__(conversion_operation)
+                                        continue
+                                    else:
+                                        already_replaced = True
+                                        file.write(line[:len(line) - len(stripped_line) - 1] +
+                                                   stripped_line.replace(included_file_name, rule_file_to_replace_with)
+                                                   + '\n')
+                                        logger.info(
+                                            "FileOperationsUtility: Replaced included file '%s' of %s module with "
+                                            "'%s' in file %s.",
+                                            included_file_name, module_header, rule_file_to_replace_with, file_path)
+                                        conversion_operation = ConversionOperation(constants.ACTION_REPLACED, file_path,
+                                                                                   "Replaced included file'"
+                                                                                   + included_file_name
+                                                                                   + "' of module '" + module_header
+                                                                                   + "' with '"
+                                                                                   + rule_file_to_replace_with + "'")
+                                        conversion_step.__add_operation__(conversion_operation)
+                                else:
+                                    file.write(line)
+                            elif stripped_line == constants.IFMODULE_END \
+                                    and len(line) - len(stripped_line) == ifmodule_indentation:
+                                start_of_ifmodule = False
+                                file.write(line)
+                            else:
+                                file.write(line)
+                        # write out other lines as is
+                        else:
+                            file.write(line)
+            except OSError as e:
+                logger.error("FileOperationsUtility: %s - %s.", e.filename, e.strerror)
+
+    @staticmethod
+    def __replace_file_includes_in_section_or_ifmodule__(dir_path, file_extension, section_header, rule_files_to_replace,
+                                                         file_to_replace_with, conversion_step):
+        """
+        In the specified section/module replace all statements including any file from the given list of rule files with
+        new file include within specified section/module of all files (of given file extension) in specified directory
+        and sub-directories.
+        Please provide only the replacement filename in case of replacement in vhost files, and complete replacement
+        include statement in case of farm files.
+
+
+        Parameters:
+            dir_path (str): The path to directory whose files are to be processed.
+            file_extension (str): The extension of the type that needs to be processed.
+            section_header (str): The section header (within the file), whose content is to be processed.
+            rule_files_to_replace (List[str]): list of rule files whose include statements are to be replaced.
+            file_to_replace_with (str): include statement/rule filename that is to be replaced with.
+            conversion_step (ConversionStep): The conversion step to which the performed actions are to be added.
+        """
+
+        if exists(dir_path) and isdir(dir_path):
+            # get all files under given directory and sub-directories with given file extension
+            files = [f for f in glob(join(dir_path, "**", "*." + file_extension), recursive=True)]
+            # lookup for include statements of the specified rule, and replace them with new rule
+            for file in files:
+                if file_extension == constants.FARM:
+                    FileOperationsUtility.__replace_file_includes_in_section_of_farm_file(file, section_header,
+                                                                                          rule_files_to_replace,
+                                                                                          file_to_replace_with,
+                                                                                          conversion_step)
+                elif file_extension == constants.VHOST:
+                    FileOperationsUtility.__replace_file_includes_in_ifmodule_of_vhost_file(file, section_header,
+                                                                                            rule_files_to_replace,
+                                                                                            file_to_replace_with,
+                                                                                            conversion_step)
+
+    @staticmethod
     def __replace_file_include_with_file_content(file_path, include_statement_syntax, rule_file_to_replace,
                                                  rule_file_content, conversion_step):
         """
@@ -504,13 +700,14 @@ class FileOperationsUtility:
                                 for line_from_rule_file_content in rule_file_content:
                                     # adjust the line to match the include statement's indentation
                                     file.write(line[:indentation - 1] + line_from_rule_file_content)
-                            logger.info("FileOperationsUtility: Replaced include statement '%s' in file %s.",
-                                        stripped_line, file_path)
-                            conversion_operation = ConversionOperation(constants.ACTION_REPLACED, file_path,
-                                                                       "Replaced include statement '" + stripped_line
-                                                                       + " with content of file '"
-                                                                       + rule_file_to_replace + "'")
-                            conversion_step.__add_operation__(conversion_operation)
+                                file.write("\n")
+                                logger.info("FileOperationsUtility: Replaced include statement '%s' in file %s.",
+                                            stripped_line, file_path)
+                                conversion_operation = ConversionOperation(constants.ACTION_REPLACED, file_path,
+                                                                           "Replaced include statement '" + stripped_line
+                                                                           + " with content of file '"
+                                                                           + rule_file_to_replace + "'")
+                                conversion_step.__add_operation__(conversion_operation)
                         # write out other lines as is
                         else:
                             file.write(line)
@@ -965,7 +1162,7 @@ class FileOperationsUtility:
         variables_definition_list = []
         # get the content of each vars file
         for file in files:
-            variables_extracted_from_file = FileOperationsUtility.__get_content_from_file__(file)
+            variables_extracted_from_file = FileOperationsUtility.__get_content_from_file__(file, True)
             for variable_def in variables_extracted_from_file:
                 if not variable_def.startswith(constants.COMMENT_ANNOTATION):
                     var_definition = variable_def.split()
@@ -1012,5 +1209,85 @@ class FileOperationsUtility:
                             flag_first = False
                             print("\nFound usage of undefined variable:")
                         print(vhost_file + ":" + str(line_index) + " : " + match.group(1))
-                        logger.error("Undefined variable usage found at : %s",
+                        logger.error("FileOperationsUtility: Undefined variable usage found at : %s",
                                      vhost_file + ":" + str(line_index) + " : " + match.group(1))
+
+    @staticmethod
+    def __consolidate_all_rule_files_into_single_rule_file__(rule_files, consolidated_rule_file_path, conversion_step):
+        """
+        Consolidate content of all rule files into a single rule file
+
+        Parameters:
+            rule_files (List[IO[AnyStr]]): The rule files whose content needs to be consolidated into a single rule file.
+            consolidated_rule_file_path (str): The new rule file path (along with the new rule file name).
+            conversion_step (ConversionStep): The conversion step to which the performed actions are to be added.
+        """
+        rule_file_content = []
+        for file in rule_files:
+            rule_file_content.extend(FileOperationsUtility.__get_content_from_file__(file, True))
+            rule_file_content.append("\n")
+            FileOperationsUtility.__delete_file__(file, conversion_step)
+        with open(consolidated_rule_file_path, "w") as f:
+            pass
+            # write the list of consolidated rules into the new file
+            for line_from_rule_file_content in rule_file_content:
+                f.write(line_from_rule_file_content)
+        logger.info("FileOperationsUtility: Consolidated content of rule files %s into %s",
+                    ', '.join(rule_files), consolidated_rule_file_path)
+        conversion_operation = ConversionOperation(constants.ACTION_ADDED, dirname(consolidated_rule_file_path),
+                                                   "Consolidated content of rule files " + ', '.join(rule_files)
+                                                   + " into " + consolidated_rule_file_path)
+        conversion_step.__add_operation__(conversion_operation)
+
+    @staticmethod
+    def __get_all_file_names__(files):
+        """
+        Get all the file names from the provided list of files.
+
+        Parameters:
+            files (List[IO[AnyStr]]): The list of files whose names we want to retrieve .
+
+        Returns:
+             a set of file names.
+        """
+        file_names = set()
+        for file in files:
+            file_names.add(basename(file))
+        return file_names
+
+    @staticmethod
+    def __get_names_of_rule_files_included__(file_path, rule_files_to_check, include_syntax):
+        """
+        From the given list of rule files, get the file names which are actually included/used in the given file.
+
+        Parameters:
+            file_path (str): The file in which we need to check for the rule files' inclusion.
+            rule_files_to_check (List[str]): The list of rule files names, whose inclusion we need to check for.
+            include_syntax (str): The include statement syntax (specific to vhost or farm files).
+
+        Returns:
+             a set of file (from among the given rule files) which are actually included/used.
+        """
+        if exists(file_path) and isfile(file_path):
+            rule_files_included = set()
+            try:
+                # open the file and read the file
+                with open(file_path) as file:
+                    file_content = file.readlines()
+                file.close()
+                # find all rule files (from the given list of rule files to check) that are actually included/used
+                for line in file_content:
+                    stripped_line = line.strip()
+                    if stripped_line.startswith(include_syntax):
+                        if include_syntax == constants.INCLUDE_SYNTAX_IN_FARM:
+                            included_file_name = basename(stripped_line.split()[1])
+                            included_file_name = included_file_name[:len(included_file_name)-1]
+                            if included_file_name in rule_files_to_check:
+                                rule_files_included.add(included_file_name)
+                        elif include_syntax == constants.INCLUDE_SYNTAX_IN_VHOST:
+                            included_file_name = basename(stripped_line.split()[1])
+                            if included_file_name in rule_files_to_check:
+                                rule_files_included.add(included_file_name)
+            except OSError as e:
+                logger.error("FileOperationsUtility: %s - %s.", e.filename, e.strerror)
+            return rule_files_included
