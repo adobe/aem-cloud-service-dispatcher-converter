@@ -15,7 +15,7 @@ This project is specifically focused on AEM Dispatcher configurations.  While th
 
 The **AEMDispatcherConverter** follows the conversion guidelines.
 
-Refer to [Converting an AMS to an Adobe Experience Manager as a Cloud Service Dispatcher Configuration](https://docs.adobe.com/content/help/en/experience-manager-cloud-service/implementing/dispatcher/overview.html#how-to-convert-an-ams-to-an-aem-as-a-cloud-service-dispatcher-configuration) for converting Adobe Managed Services Dispatcher Configurations v2.0 to AEM as a Cloud Service Dispatcher Configurations.
+Refer to [Converting an AMS to an Adobe Experience Manager as a Cloud Service Dispatcher Configuration](https://docs.adobe.com/content/help/en/experience-manager-cloud-service/implementing/content-delivery/disp-overview.html#how-to-convert-an-ams-to-an-aem-as-a-cloud-service-dispatcher-configuration) for converting Adobe Managed Services Dispatcher Configurations v2.0 to AEM as a Cloud Service Dispatcher Configurations.
 
    >[NOTE]
    > The utility assumes that the Adobe Managed Services dispatcher configurations provided is of v2.0. Customers who are using v1.0 configurations should contact Customer Support to get help for migrating from v1.0 to v2.0.
@@ -70,7 +70,7 @@ The AEM Dispatcher Converter has the following limitations:
 
 1. If you see errors concerning undefined variable `PUBLISH_DOCROOT`, rename it to `DOCROOT`.
 
-For troubleshooting other errors, refer to [Troubleshooting Local Validation of Dispatcher Configuration](https://docs.adobe.com/content/help/en/experience-manager-cloud-service/implementing/dispatcher/overview.html#local-validation-of-dispatcher-configuration).
+For troubleshooting other errors, refer to [Troubleshooting & Local Validation of Dispatcher Configuration](https://docs.adobe.com/content/help/en/experience-manager-learn/cloud-service/local-development-environment-set-up/dispatcher-tools.html#troubleshooting).
 
 
 #### Development Considerations
@@ -81,7 +81,7 @@ For troubleshooting other errors, refer to [Troubleshooting Local Validation of 
 
   * Define the steps for transition following which one can convert the on-premise configurations to AEM as a Cloud Service dispatcher configurations.
   
-    Refer to [Converting an AMS to an Adobe Experience Manager as a Cloud Service Dispatcher configuration]( https://docs.adobe.com/content/help/en/experience-manager-cloud-service/implementing/dispatcher/overview.html#how-to-convert-an-ams-to-an-aem-as-a-cloud-service-dispatcher-configuration) for more details.
+    Refer to [Converting an AMS to an Adobe Experience Manager as a Cloud Service Dispatcher configuration](https://docs.adobe.com/content/help/en/experience-manager-cloud-service/implementing/content-delivery/disp-overview.html#how-to-convert-an-ams-to-an-aem-as-a-cloud-service-dispatcher-configuration) for more details.
 
   * In the `converter` directory, implement the rules of transition in a new converter class (for reference see `AEMDispatcherConverter`)
   using the generic file and folder manipulation utilities provided under `util` directory. 
